@@ -1,0 +1,48 @@
+{
+  "name": "bacluc-opencode-keep-running",
+  "version": "main",
+  "description": "OpenCode plugin that detects when the agent is stuck and automatically continues the session",
+  "keywords": [
+    "opencode",
+    "plugin",
+    "keep-running",
+    "stuck-detection"
+  ],
+  "homepage": "https://github.com/BacLuc/opencode-keep-running#readme",
+  "bugs": {
+    "url": "https://github.com/BacLuc/opencode-keep-running/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BacLuc/opencode-keep-running.git"
+  },
+  "license": "BSD-3-Clause",
+  "author": "Lucius Bachmann",
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.ts"
+  },
+  "main": "src/server.ts",
+  "directories": {
+    "test": "tests"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.3.13"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.7"
+  }
+}
