@@ -6,28 +6,19 @@
   "packageRules": [
     {
       "matchUpdateTypes": ["major"],
-      "labels": ["dependencies", "breaking"]
+      "labels": ["breaking", "bump:major"]
     },
     {
       "matchUpdateTypes": ["minor"],
-      "labels": ["dependencies", "enhancement"]
+      "labels": ["enhancement", "bump:minor"]
     },
     {
       "matchUpdateTypes": ["patch"],
-      "labels": ["dependencies", "patch"]
+      "labels": ["patch", "bump:patch"]
     },
     {
       "matchDepTypes": ["devDependencies"],
-      "labels": ["dependencies", "dev"]
-    },
-    {
-      "matchDepTypes": ["peerDependencies"],
-      "labels": ["dependencies", "peer"]
+      "labels": ["dev"]
     }
-  ],
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 2,
-  "semanticCommits": "enabled",
-  "separateMajorMinor": true,
-  "separateMinorPatch": true
+  ]
 }
