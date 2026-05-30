@@ -10,6 +10,8 @@ on:
 jobs:
   create-release-tag:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Create new tag
         uses: projectsyn/pr-label-tag-action@796e1eaeafa4de313848e03bd5341d55a08a596d # v1.3.1
