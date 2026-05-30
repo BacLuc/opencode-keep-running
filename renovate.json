@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "minimumReleaseAge": "14 days",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "breaking"]
+    },
+    {
+      "matchUpdateTypes": ["minor"],
+      "labels": ["dependencies", "enhancement"]
+    },
+    {
+      "matchUpdateTypes": ["patch"],
+      "labels": ["dependencies", "patch"]
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "labels": ["dependencies", "dev"]
+    },
+    {
+      "matchDepTypes": ["peerDependencies"],
+      "labels": ["dependencies", "peer"]
+    }
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "semanticCommits": "enabled",
+  "separateMajorMinor": true,
+  "separateMinorPatch": true
+}
