@@ -1,5 +1,3 @@
 node_modules/
 dist/
-.opencode/
 *.tgz
-package-lock.json

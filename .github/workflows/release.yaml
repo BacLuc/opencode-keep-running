@@ -63,4 +63,6 @@ jobs:
           fi
           jq '.version = "'$TAG'"' package.json > package.json.tmp && mv package.json.tmp package.json
 
+      - run: rm package-lock.json
+
       - run: npm publish
