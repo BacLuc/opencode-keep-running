@@ -1,5 +1,0 @@
-{
-  "plugin": [
-    ["file:///workspaces/opencode-keep-running-plugin", { "threshold": 120000, "message": "continue", "debug": false }]
-  ]
-}
