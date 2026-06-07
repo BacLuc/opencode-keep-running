@@ -28,6 +28,9 @@ interface SessionState {
   continuesSent: number
   lastContinueAt: number
   isResolvingStuck: boolean
+  pendingTools: number
+  pendingCommands: number
+  runningTools: Set<string>
 }
 
 interface ResolvedConfig {
@@ -60,6 +63,9 @@ export function createSessionState(): SessionState {
     continuesSent: 0,
     lastContinueAt: 0,
     isResolvingStuck: false,
+    pendingTools: 0,
+    pendingCommands: 0,
+    runningTools: new Set<string>(),
   }
 }
 
@@ -164,6 +170,20 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
       return
     }
 
+    if (state.pendingTools > 0 || state.pendingCommands > 0) {
+      log(`${sessionId}: ${state.pendingTools} tool(s) and ${state.pendingCommands} command(s) pending, skipping abort`)
+      state.lastActivityAt = Date.now()
+      scheduleCheck(sessionId)
+      return
+    }
+
+    if (state.runningTools.size > 0) {
+      log(`${sessionId}: ${state.runningTools.size} tool(s) actively running, skipping abort`)
+      state.lastActivityAt = Date.now()
+      scheduleCheck(sessionId)
+      return
+    }
+
     const stuckFor = Date.now() - state.lastActivityAt
     if (stuckFor < config.threshold) {
       log(`${sessionId}: activity ${stuckFor}ms ago, rescheduling`)
@@ -186,6 +206,25 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
         await new Promise((resolve) => setTimeout(resolve, config.abortCooldown))
       }
 
+      if (!state.isActive) return
+      if (state.pendingTools > 0 || state.pendingCommands > 0) {
+        log(
+          `${sessionId}: ${state.pendingTools} tool(s) and ${state.pendingCommands} command(s) pending after abort, skipping prompt`,
+        )
+        state.isResolvingStuck = false
+        state.lastActivityAt = Date.now()
+        scheduleCheck(sessionId)
+        return
+      }
+      const stuckForAfterAbort = Date.now() - state.lastActivityAt
+      if (stuckForAfterAbort < config.threshold) {
+        log(`${sessionId}: activity ${stuckForAfterAbort}ms ago after abort, skipping prompt`)
+        state.isResolvingStuck = false
+        state.lastActivityAt = Date.now()
+        scheduleCheck(sessionId)
+        return
+      }
+
       log(`${sessionId}: sending "${config.message}"`)
       try {
         await client.session.prompt({
@@ -205,6 +244,9 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
   function markIdle(sessionId: string) {
     const state = getOrCreate(sessionId)
     state.isActive = false
+    state.pendingTools = 0
+    state.pendingCommands = 0
+    state.runningTools.clear()
     cancelScheduledCheck(state)
   }
 
@@ -253,6 +295,9 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
           cancelScheduledCheck(state)
           state.isActive = false
           state.isResolvingStuck = false
+          state.pendingTools = 0
+          state.pendingCommands = 0
+          state.runningTools.clear()
           break
         }
 
@@ -260,7 +305,10 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
           const sessionId = findSessionIdInEvent(event)
           if (sessionId) {
             const old = sessions.get(sessionId)
-            if (old) cancelScheduledCheck(old)
+            if (old) {
+              cancelScheduledCheck(old)
+              old.runningTools.clear()
+            }
             sessions.delete(sessionId)
           }
           break
@@ -270,16 +318,89 @@ export const KeepRunningPlugin: Plugin = async (ctx, rawOptions) => {
           const sessionId = findSessionIdInEvent(event)
           if (sessionId) {
             const state = sessions.get(sessionId)
-            if (state) cancelScheduledCheck(state)
+            if (state) {
+              cancelScheduledCheck(state)
+              state.runningTools.clear()
+            }
             sessions.delete(sessionId)
           }
+          break
+        }
+
+        case 'command.executed': {
+          const { sessionID } = event.properties as { sessionID?: string }
+          if (sessionID) {
+            const state = getOrCreate(sessionID)
+            state.pendingCommands = Math.max(0, state.pendingCommands - 1)
+            recordActivity(sessionID)
+          }
+          break
+        }
+
+        case 'permission.updated': {
+          const props = event.properties as { sessionID?: string }
+          if (props.sessionID) recordActivity(props.sessionID)
+          break
+        }
+
+        case 'permission.replied': {
+          const { sessionID } = event.properties as { sessionID?: string }
+          if (sessionID) recordActivity(sessionID)
+          break
+        }
+
+        case 'message.part.removed': {
+          const { sessionID } = event.properties as { sessionID?: string }
+          if (sessionID) recordActivity(sessionID)
+          break
+        }
+
+        case 'session.compacted': {
+          const { sessionID } = event.properties as { sessionID?: string }
+          if (sessionID) recordActivity(sessionID)
+          break
+        }
+
+        case 'todo.updated': {
+          const { sessionID } = event.properties as { sessionID?: string }
+          if (sessionID) recordActivity(sessionID)
           break
         }
       }
     },
 
-    async 'tool.execute.after'(input) {
+    async 'tool.execute.before'(input, _output) {
+      if (input.sessionID) {
+        const state = getOrCreate(input.sessionID)
+        state.pendingTools++
+        if (input.callID) {
+          state.runningTools.add(input.callID)
+        }
+        recordActivity(input.sessionID)
+      }
+    },
+
+    async 'command.execute.before'(input, _output) {
+      if (input.sessionID) {
+        const state = getOrCreate(input.sessionID)
+        state.pendingCommands++
+        recordActivity(input.sessionID)
+      }
+    },
+
+    async 'permission.ask'(input, _output) {
       if (input.sessionID) recordActivity(input.sessionID)
+    },
+
+    async 'tool.execute.after'(input, _output) {
+      if (input.sessionID) {
+        const state = getOrCreate(input.sessionID)
+        state.pendingTools = Math.max(0, state.pendingTools - 1)
+        if (input.callID) {
+          state.runningTools.delete(input.callID)
+        }
+        recordActivity(input.sessionID)
+      }
     },
   }
 }

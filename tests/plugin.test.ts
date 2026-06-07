@@ -38,10 +38,39 @@ async function emitEvent(hooks: Hooks, type: string, properties: Record<string, 
   await hooks.event!({ event: makeEvent(type, properties) })
 }
 
-async function emitToolAfter(hooks: Hooks, sessionId: string) {
+async function emitToolAfter(hooks: Hooks, sessionId: string, callId: string = 'c1') {
   await hooks['tool.execute.after']!(
-    { tool: 'bash', sessionID: sessionId, callID: 'c1', args: {} } as any,
+    { tool: 'bash', sessionID: sessionId, callID: callId, args: {} } as any,
     { title: '', output: '', metadata: {} } as any,
+  )
+}
+
+async function emitToolBefore(hooks: Hooks, sessionId: string, callId: string = 'c1') {
+  const output = { args: {} }
+  await hooks['tool.execute.before']!({ tool: 'bash', sessionID: sessionId, callID: callId } as any, output as any)
+}
+
+async function emitCommandBefore(hooks: Hooks, sessionId: string) {
+  const output = { parts: [] }
+  await hooks['command.execute.before']!(
+    { command: 'sleep', sessionID: sessionId, arguments: '10' } as any,
+    output as any,
+  )
+}
+
+async function emitPermissionAsk(hooks: Hooks, sessionId: string) {
+  const output = { status: 'ask' as const }
+  await hooks['permission.ask']!(
+    {
+      id: 'perm-1',
+      type: 'file',
+      sessionID: sessionId,
+      messageID: 'msg-1',
+      title: 'Test permission',
+      metadata: {},
+      time: { created: Date.now() },
+    } as any,
+    output,
   )
 }
 
@@ -230,6 +259,65 @@ describe('KeepRunningPlugin', () => {
       expect(client.session.abort).not.toHaveBeenCalled()
     })
 
+    it('does not send prompt if tool starts during abort cooldown', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 1_000,
+      })
+      const sid = 'sess-tool-race'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      // Now in abort cooldown
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+
+      // Tool starts during abort cooldown
+      await emitToolBefore(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(client.session.prompt).not.toHaveBeenCalled()
+    })
+
+    it('does not send prompt if activity arrives during abort cooldown', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 1_000,
+      })
+      const sid = 'sess-activity-race'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+
+      // Activity arrives during abort cooldown
+      await emitEvent(hooks, 'message.part.updated', { part: { sessionID: sid, type: 'text' } })
+
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(client.session.prompt).not.toHaveBeenCalled()
+    })
+
+    it('tool running prevents abort even past threshold', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+      })
+      const sid = 'sess-tool-past-threshold'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await emitToolAfter(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
     it('tracks activity from message.part.updated events', async () => {
       const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
       const sid = 'sess-parts'
@@ -289,6 +377,332 @@ describe('KeepRunningPlugin', () => {
 
       await vi.advanceTimersByTimeAsync(5_000)
       expect(client.session.abort).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  describe('in-flight operation tracking', () => {
+    it('prevents abort while a tool is running (tool.execute.before)', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-tool-flight'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).not.toHaveBeenCalled()
+    })
+
+    it('prevents abort while a command is running (command.execute.before)', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-cmd-flight'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitCommandBefore(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).not.toHaveBeenCalled()
+    })
+
+    it('prevents abort when both tools and commands are pending', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-both-flight'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+      await emitCommandBefore(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).not.toHaveBeenCalled()
+    })
+
+    it('does NOT abort while a tool is running even past threshold', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-tool-running'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid, 'call-1')
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).not.toHaveBeenCalled()
+    })
+
+    it('aborts after tool finishes and inactivity exceeds threshold again', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-tool-finishes'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid, 'call-2')
+
+      // Tool runs past threshold
+      await vi.advanceTimersByTimeAsync(6_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      // Tool finishes — this records activity and reschedules the check
+      await emitToolAfter(hooks, sid, 'call-2')
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      // Now let the new threshold pass without further activity
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('does NOT send prompt if tool finishes during abortCooldown', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 2_000,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-race-abort'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      // Pass the threshold — abort is called, abortCooldown starts
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+      expect(client.session.prompt).not.toHaveBeenCalled()
+
+      // During the cooldown, a tool finishes (records activity)
+      await emitToolAfter(hooks, sid)
+
+      // Finish the cooldown
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      // Because activity occurred during cooldown, prompt should NOT have been sent
+      expect(client.session.prompt).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('new activity events', () => {
+    it('tracks activity from command.executed events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-cmd-exec'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'command.executed', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from permission.updated events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-perm-upd'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'permission.updated', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from permission.replied events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-perm-replied'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'permission.replied', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from message.part.removed events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-part-rem'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'message.part.removed', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from session.compacted events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-compacted'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'session.compacted', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from todo.updated events', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-todo'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitEvent(hooks, 'todo.updated', { sessionID: sid })
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('tracks activity from permission.ask hook', async () => {
+      const { client, hooks } = await createPlugin({ threshold: 10_000, abortCooldown: 0 })
+      const sid = 'sess-perm-ask'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await vi.advanceTimersByTimeAsync(8_000)
+
+      await emitPermissionAsk(hooks, sid)
+
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect(client.session.abort).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('pending counter lifecycle reset', () => {
+    it('resets pending tool counter on session.error', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-err-reset'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+      await emitEvent(hooks, 'session.error', { sessionID: sid })
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('resets pending counters when session goes idle', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-idle-reset'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+      await emitCommandBefore(hooks, sid)
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'idle' } })
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('resets pending counters on session.created', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-created-reset'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+      await emitCommandBefore(hooks, sid)
+      await emitEvent(hooks, 'session.created', { info: { id: sid } })
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(client.session.abort).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not abort after session.deleted even with pending operations', async () => {
+      const { client, hooks } = await createPlugin({
+        threshold: 5_000,
+        abortCooldown: 0,
+        continueCooldown: 0,
+      })
+      const sid = 'sess-del-pending'
+
+      await emitEvent(hooks, 'session.status', { sessionID: sid, status: { type: 'busy' } })
+      await emitToolBefore(hooks, sid)
+      await emitEvent(hooks, 'session.deleted', { info: { id: sid } })
+
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      expect(client.session.abort).not.toHaveBeenCalled()
     })
   })
 
