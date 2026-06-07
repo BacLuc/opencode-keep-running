@@ -1,3 +1,4 @@
 {
-  "$schema": "https://opencode.ai/config.json"
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [[".", { "threshold": 120000, "message": "continue", "debug": false }]]
 }
