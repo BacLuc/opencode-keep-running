@@ -18,6 +18,7 @@ function createPluginContext(client: ReturnType<typeof createMockClient>): Plugi
     project: { id: 'proj-1', worktree: '/tmp/test' } as any,
     directory: '/tmp/test',
     worktree: '/tmp/test',
+    experimental_workspace: { register: vi.fn() } as any,
     $: {} as any,
     serverUrl: new URL('http://localhost:4096'),
   }
