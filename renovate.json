@@ -3,22 +3,29 @@
   "extends": ["config:recommended"],
   "minimumReleaseAge": "14 days",
   "labels": ["dependencies"],
+  "automerge": true,
   "packageRules": [
     {
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
       "matchUpdateTypes": ["major"],
-      "labels": ["breaking", "bump:major"]
+      "addLabels": ["breaking", "bump:major"]
     },
     {
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
       "matchUpdateTypes": ["minor"],
-      "labels": ["enhancement", "bump:minor"]
+      "addLabels": ["enhancement", "bump:minor"]
     },
     {
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies"],
       "matchUpdateTypes": ["patch"],
-      "labels": ["patch", "bump:patch"]
+      "addLabels": ["patch", "bump:patch"]
     },
     {
       "matchDepTypes": ["devDependencies"],
-      "labels": ["dev"]
+      "addLabels": ["dev"]
     }
   ]
 }
