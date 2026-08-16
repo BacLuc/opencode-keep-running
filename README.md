@@ -1,3 +1,6 @@
+> [!WARNING]  
+> This package is deprecated. Use [opencode-auto-resume](https://github.com/Mte90/opencode-auto-resume) instead.
+
 # opencode-keep-running
 
 An [OpenCode](https://opencode.ai) plugin that detects when the AI agent is stuck and automatically sends a "continue" prompt to keep the session running.
